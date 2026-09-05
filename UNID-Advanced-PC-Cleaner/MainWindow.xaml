@@ -1,0 +1,141 @@
+<Window x:Class="UNIDAdvancedPCCleaner.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="UNID Advanced PC Cleaner" Height="740" Width="1150"
+        MinHeight="620" MinWidth="980"
+        WindowStartupLocation="CenterScreen" Background="#F5F6FA">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="240"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="#1B1F2A">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="18,22,18,18">
+                    <TextBlock Text="UNID" FontSize="24" FontWeight="Bold" Foreground="#7C8CFF"/>
+                    <TextBlock Text="Advanced PC Cleaner" FontSize="13" FontWeight="SemiBold" Foreground="White" Margin="0,2,0,0"/>
+                    <TextBlock Text="Built for developers. Safe for everyone." FontSize="11" Foreground="#8A93A8" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <ListBox x:Name="SectionNav" Margin="6,0,6,8" Background="Transparent" BorderThickness="0"
+                         SelectionChanged="SectionNav_SelectionChanged">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="14,10"/>
+                            <Setter Property="Margin" Value="2,2"/>
+                            <Setter Property="Foreground" Value="#C7CDDC"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="#2A3145"/>
+                                    <Setter Property="Foreground" Value="White"/>
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#242B3D"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBoxItem Tag="Dashboard" Content="Dashboard"/>
+                    <ListBoxItem Tag="Dev" Content="Dev Dependencies &amp; Builds"/>
+                    <ListBoxItem Tag="Cache" Content="Dev Caches"/>
+                    <ListBoxItem Tag="Temp" Content="Temp Files"/>
+                    <ListBoxItem Tag="Recycle" Content="Recycle Bin"/>
+                    <ListBoxItem Tag="Downloads" Content="Downloads"/>
+                    <ListBoxItem Tag="System" Content="System Files"/>
+                    <ListBoxItem Tag="Large" Content="Large Files"/>
+                </ListBox>
+                <TextBlock DockPanel.Dock="Bottom" Text="UNID Advanced PC Cleaner v1.0" Foreground="#5A6378" FontSize="11" Margin="18,0,0,12"/>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="White" Padding="20,12">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0">
+                        <StackPanel>
+                            <TextBlock x:Name="SectionTitle" FontSize="20" FontWeight="SemiBold" Foreground="#111827"/>
+                            <TextBlock x:Name="SectionDesc" FontSize="12" Foreground="#6B7280" Margin="0,3,0,0" TextWrapping="Wrap" MaxWidth="640"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button x:Name="ScanBtn" Content="Scan" Style="{StaticResource PrimaryBtn}" Click="Scan_Click"/>
+                            <Button x:Name="CleanBtn" Content="Clean Selected" Style="{StaticResource CleanBtn}" Margin="10,0,0,0" Click="Clean_Click" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Grid>
+                    <Grid Grid.Row="1" Margin="0,10,0,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Scan drives:" FontSize="12" FontWeight="SemiBold" Foreground="#374151" VerticalAlignment="Center"/>
+                            <WrapPanel x:Name="DrivePanel" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <CheckBox x:Name="AllDrivesChk" Content="All drives" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                  FontSize="12" Foreground="#374151"
+                                  Checked="AllDrivesChk_Changed" Unchecked="AllDrivesChk_Changed"/>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="1" Margin="20,12,20,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <ProgressBar x:Name="ScanProgress" Height="8" Maximum="100" Foreground="#0B6EFD" Background="#E5E7EB" BorderThickness="0"/>
+                <TextBlock x:Name="StatusText" Grid.Row="1" FontSize="11" Foreground="#6B7280" Margin="0,4,0,0"/>
+            </Grid>
+
+            <Grid Grid.Row="2" Margin="20,12,20,0">
+                <StackPanel x:Name="DashboardPanel" Visibility="Collapsed">
+                    <TextBlock Text="Scan any section to find cleanable files, or scan everything at once." FontSize="12" Foreground="#374151"/>
+                    <Button x:Name="ScanAllBtn" Content="Scan All Sections" Style="{StaticResource PrimaryBtn}" HorizontalAlignment="Left" Margin="0,12,0,0" Click="ScanAll_Click"/>
+                    <TextBlock x:Name="DashTotal" FontSize="13" FontWeight="SemiBold" Foreground="#111827" Margin="0,14,0,0"/>
+                    <ListView x:Name="DashList" Margin="0,10,0,0" Background="White" BorderBrush="#E5E7EB">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Section" Width="220" DisplayMemberBinding="{Binding Name}"/>
+                                <GridViewColumn Header="Status" Width="300" DisplayMemberBinding="{Binding Detail}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </StackPanel>
+
+                <DataGrid x:Name="ResultsGrid" Visibility="Collapsed"
+                          AutoGenerateColumns="False" IsReadOnly="False"
+                          Background="White" BorderBrush="#E5E7EB" RowHeight="26"
+                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                          HorizontalGridLinesBrush="#F3F4F6" AlternatingRowBackground="#FAFBFC"
+                          CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended">
+                    <DataGrid.Columns>
+                        <DataGridCheckBoxColumn Header="Select" Binding="{Binding IsSelected}" Width="56"/>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="180"/>
+                        <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="90"/>
+                        <DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="*"/>
+                        <DataGridTextColumn Header="Impact" Binding="{Binding Impact}" Width="300"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+
+            <Border Grid.Row="3" Background="White" Padding="20,10">
+                <Grid>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <CheckBox x:Name="SelectAllChk" Content="Select all" VerticalAlignment="Center"
+                                  Checked="SelectAllChk_Changed" Unchecked="SelectAllChk_Changed"/>
+                        <TextBlock x:Name="SelectedInfo" Text="Selected: 0 items - 0 B" Margin="18,0,0,0" VerticalAlignment="Center" FontSize="12" Foreground="#374151"/>
+                    </StackPanel>
+                    <TextBlock Text="Installed tools and software are never touched" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="11" Foreground="#9CA3AF"/>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

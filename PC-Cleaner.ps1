@@ -9,6 +9,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $script:Targets = @()
 $script:Selected = @{}
+$script:BarLineLen = 0
 $script:LogFile = Join-Path $PSScriptRoot 'cleaner-log.csv'
 if (-not (Test-Path -LiteralPath $PSScriptRoot)) { $script:LogFile = Join-Path $env:TEMP 'cleaner-log.csv' }
 
@@ -18,6 +19,41 @@ function Format-Size {
     if ($Bytes -lt 1MB) { return "{0:N0} KB" -f ($Bytes / 1KB) }
     if ($Bytes -lt 1GB) { return "{0:N1} MB" -f ($Bytes / 1MB) }
     return "{0:N2} GB" -f ($Bytes / 1GB)
+}
+
+function Get-Impact {
+    param([string]$Name)
+    switch -Regex ($Name) {
+        'recycle'                  { 'PERMANENT - deleted files cannot be restored' }
+        'node_modules'             { 'dependencies removed - run npm install / yarn to restore (needs lockfile + internet)' }
+        '^npm cache|^pnpm store|^yarn cache|^bun cache' { 'safe - packages re-download on next install' }
+        '^pip cache|^uv cache|^composer' { 'safe - re-downloaded on next install' }
+        '^cargo registry'          { 'crates re-fetched on next build - offline builds fail until then' }
+        '^nuget packages'          { 'restored on next dotnet restore/build - offline builds fail until then' }
+        '^gradle'                  { 're-downloaded on next Gradle build' }
+        '^maven'                   { 're-downloaded on next Maven build' }
+        '^go build cache'          { 'safe - rebuilds automatically' }
+        'JetBrains'                { 'safe - rebuilt when the IDE starts' }
+        '^\.next|^\.nuxt|^\.output|^\.turbo' { 'build output - recreate with next build / nuxt build; deployed sites need rebuild + redeploy' }
+        '^(dist|build|out|target|obj)' { 'build output - regenerated on next project build' }
+        '__pycache__|pytest_cache|mypy_cache|ruff_cache' { 'safe - Python regenerates automatically' }
+        '^\.cache'                 { 'safe - tools rebuild it automatically' }
+        'temp files'               { 'in-use files are skipped; close running apps first' }
+        default                    { 'safe - regenerable' }
+    }
+}
+
+function Show-ProgressBar {
+    param([double]$Percent, [string]$Label = '', [string]$Color = 'Cyan')
+    $width = 40
+    $filled = [Math]::Floor([Math]::Min(100, $Percent) / 100 * $width)
+    $bar = '[' + ('#' * $filled) + ('-' * ($width - $filled)) + ']'
+    $pct = ("{0,3}%" -f [Math]::Min(100, [int]$Percent))
+    $msg = "  $bar $pct  $Label"
+    $pad = ''
+    if ($msg.Length -lt $script:BarLineLen) { $pad = ' ' * ($script:BarLineLen - $msg.Length) }
+    Write-Host ("`r" + $msg + $pad) -NoNewline -ForegroundColor $Color
+    $script:BarLineLen = $msg.Length
 }
 
 $script:SizeCode = @'
@@ -54,6 +90,7 @@ function Add-Target {
         Category   = $Category
         Path       = $Path
         SizeBytes  = $SizeBytes
+        Impact     = (Get-Impact -Name $Name)
     }
 }
 
@@ -71,21 +108,26 @@ function Compute-AllSizes {
         return
     }
     $jobs = @()
+    $catTotal = @{}
     foreach ($t in $pending) {
         $ps = [powershell]::Create()
         $ps.RunspacePool = $pool
         $code = $script:SizeCode + "`r`nGet-FolderSize -Path '" + $t.Path.Replace("'", "''") + "'"
         $ps.AddScript($code) | Out-Null
-        $jobs += [pscustomobject]@{ Path = $t.Path; PS = $ps; Handle = $ps.BeginInvoke(); Complete = $false }
+        $jobs += [pscustomobject]@{ Path = $t.Path; Category = $t.Category; PS = $ps; Handle = $ps.BeginInvoke(); Complete = $false }
+        if ($catTotal.ContainsKey($t.Category)) { $catTotal[$t.Category]++ } else { $catTotal[$t.Category] = 1 }
     }
+    $catDone = @{}
+    $curCat = $pending[0].Category
     $done = 0
-    $lastReported = 0
     while ($done -lt $jobs.Count) {
         foreach ($j in $jobs) {
             if ($j.Complete) { continue }
             if ($j.Handle.AsyncWaitHandle.WaitOne(0)) {
                 $j.Complete = $true
                 $done++
+                $curCat = $j.Category
+                if ($catDone.ContainsKey($curCat)) { $catDone[$curCat]++ } else { $catDone[$curCat] = 1 }
                 $size = 0
                 try {
                     $raw = $j.PS.EndInvoke($j.Handle)
@@ -96,12 +138,10 @@ function Compute-AllSizes {
                 if ($match) { $match.SizeBytes = $size }
             }
         }
-        if ($done -ge ($lastReported + 10) -or $done -eq $jobs.Count) {
-            Write-Host ("  measured {0}/{1} folders..." -f $done, $jobs.Count)
-            $lastReported = $done
-        }
+        Show-ProgressBar -Percent (($done / $jobs.Count) * 100) -Label ("Measuring [{0}] {1}/{2}" -f $curCat, $catDone[$curCat], $catTotal[$curCat]) -Color 'Cyan'
         Start-Sleep -Milliseconds 200
     }
+    Write-Host ""
     $pool.Close()
     $pool.Dispose()
 }
@@ -312,6 +352,13 @@ if ($script:Targets.Count -eq 0) {
 
 Write-Host ""
 Write-Host "----------------- SCAN RESULTS -----------------" -ForegroundColor Cyan
+Write-Host "  [!] = needs rebuild/reinstall     [!!] = permanent deletion" -ForegroundColor DarkGray
+$catWarn = @{
+    'Build output' = 'Warning: build outputs - projects that run or deploy from these (next start, served dist) need a rebuild + redeploy.'
+    'Dev cache'    = 'Effect: packages re-download on next install - first install is slower, offline builds may fail.'
+    'Temp files'   = 'Effect: in-use files are skipped automatically. Close running apps for best results.'
+    'Recycle Bin'  = 'Warning: deletion is permanent - files cannot be restored.'
+}
 $currentCat = ''
 $grandTotal = 0L
 foreach ($t in $script:Targets) {
@@ -319,9 +366,19 @@ foreach ($t in $script:Targets) {
         $currentCat = $t.Category
         Write-Host ""
         Write-Host "  [$currentCat]" -ForegroundColor Magenta
+        if ($catWarn.ContainsKey($currentCat)) {
+            Write-Host ("    {0}" -f $catWarn[$currentCat]) -ForegroundColor DarkYellow
+        }
     }
     $sizeStr = if ($t.SizeBytes -ge 0) { Format-Size -Bytes $t.SizeBytes } else { 'n/a' }
-    Write-Host ("  {0,3}) {1,12}  {2,-24} {3}" -f $t.Id, $sizeStr, $t.Name, $t.Path) -ForegroundColor White
+    Write-Host ("  {0,3}) {1,12}  {2,-24} {3}" -f $t.Id, $sizeStr, $t.Name, $t.Path) -ForegroundColor White -NoNewline
+    if ($t.Impact -like 'PERMANENT*') {
+        Write-Host "  [!!]" -ForegroundColor Red
+    } elseif ($t.Impact -notlike 'safe*' -and $t.Impact -notlike 'in-use*') {
+        Write-Host "  [!]" -ForegroundColor Yellow
+    } else {
+        Write-Host ""
+    }
     $grandTotal += [Math]::Max(0, $t.SizeBytes)
 }
 Write-Host ""
@@ -354,6 +411,7 @@ if ($SelectIds.Count -gt 0) {
         Write-Host ("Selected {0} item(s), total {1}:" -f $sel.Count, (Format-Size -Bytes $selTotal)) -ForegroundColor Yellow
         foreach ($t in $sel) {
             Write-Host ("  {0,3}) {1,12}  {2,-24} {3}" -f $t.Id, (Format-Size -Bytes $t.SizeBytes), $t.Name, $t.Path) -ForegroundColor White
+            Write-Host ("         Impact: {0}" -f $t.Impact) -ForegroundColor DarkYellow
         }
         $confirm = Read-Host "Delete these items now? (y=yes, n=change selection, q=quit)"
         if ($confirm.ToLower() -eq 'y' -or $Force) {
@@ -366,12 +424,27 @@ if ($SelectIds.Count -gt 0) {
 
 $freed = 0L
 $failed = 0
+$selList = @($script:Targets | Where-Object { $script:Selected.ContainsKey($_.Id) })
+$cleanTotal = @{}
+foreach ($t in $selList) {
+    if ($cleanTotal.ContainsKey($t.Category)) { $cleanTotal[$t.Category]++ } else { $cleanTotal[$t.Category] = 1 }
+}
+$cleanDone = @{}
+$lastCleanCat = ''
 Write-Host ""
 Write-Host "----------------- CLEANING -----------------" -ForegroundColor Cyan
-foreach ($t in $script:Targets | Where-Object { $script:Selected.ContainsKey($_.Id) }) {
+$n = 0
+foreach ($t in $selList) {
+    $n++
     $size = [Math]::Max(0, $t.SizeBytes)
+    if ($t.Category -ne $lastCleanCat) {
+        $lastCleanCat = $t.Category
+        Write-Host ""
+        Write-Host ("--- Cleaning [ {0} ] ---" -f $t.Category) -ForegroundColor Magenta
+    }
+    Write-Host ("    {0}  ({1})" -f $t.Name, (Format-Size -Bytes $size)) -ForegroundColor White
+    Write-Host ("    Impact: {0}" -f $t.Impact) -ForegroundColor DarkYellow
     if ($t.Path -eq 'RECYCLEBIN') {
-        $ok = $true
         foreach ($root in Get-DriveRoots) {
             $letter = $root.Substring(0, 1)
             Clear-RecycleBin -DriveLetter $letter -Force -ErrorAction SilentlyContinue
@@ -387,29 +460,25 @@ foreach ($t in $script:Targets | Where-Object { $script:Selected.ContainsKey($_.
             $failed++
             Write-Host ("  [SKIP] {0,12}  {1}  <- protected" -f (Format-Size -Bytes $size), $t.Name) -ForegroundColor Red
         } else {
-            try {
-                Remove-Item -LiteralPath $t.Path -Recurse -Force -ErrorAction Stop
-                if (Test-Path -LiteralPath $t.Path) {
-                    $status = 'Partial'
-                    $details = 'Some files locked/in use, leftovers remain'
-                    $failed++
-                    Write-Host ("  [LOCK] {0,12}  {1}  <- partially locked, retry later" -f (Format-Size -Bytes $size), $t.Name) -ForegroundColor Red
-                } else {
-                    $status = 'Deleted'
-                    $details = 'OK'
-                    $freed += $size
-                    Write-Host ("  [OK]   {0,12}  {1}" -f (Format-Size -Bytes $size), $t.Name) -ForegroundColor Green
-                }
-            } catch {
-                $status = 'Failed'
-                $details = $_.Exception.Message
+            Remove-Item -LiteralPath $t.Path -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $t.Path) {
+                $status = 'Partial'
+                $details = 'Some files locked/in use, leftovers remain'
                 $failed++
-                Write-Host ("  [FAIL] {0,12}  {1}" -f (Format-Size -Bytes $size), $t.Name) -ForegroundColor Red
+                Write-Host ("  [LOCK] {0,12}  {1}  <- partially locked, retry later" -f (Format-Size -Bytes $size), $t.Name) -ForegroundColor Yellow
+            } else {
+                $status = 'Deleted'
+                $details = 'OK'
+                $freed += $size
+                Write-Host ("  [OK]   {0,12}  {1}" -f (Format-Size -Bytes $size), $t.Name) -ForegroundColor Green
             }
         }
     }
+    if ($cleanDone.ContainsKey($t.Category)) { $cleanDone[$t.Category]++ } else { $cleanDone[$t.Category] = 1 }
+    Show-ProgressBar -Percent (($n / $selList.Count) * 100) -Label ("Cleaning [{0}] {1}/{2}   (item {3}/{4})" -f $t.Category, $cleanDone[$t.Category], $cleanTotal[$t.Category], $n, $selList.Count) -Color 'Cyan'
     Write-Log -Category $t.Category -Path $t.Path -Size $size -Status $status -Details $details
 }
+Write-Host ""
 
 Write-Host ""
 Write-Host "----------------- SUMMARY -----------------" -ForegroundColor Cyan
@@ -419,5 +488,13 @@ if ($failed -gt 0) {
 } else {
     Write-Host "All items cleaned successfully." -ForegroundColor Green
 }
+$deletedNonSafe = @($selList | Where-Object { $script:Selected.ContainsKey($_.Id) -and $_.Impact -notlike 'safe*' -and $_.Impact -notlike 'PERMANENT*' -and $_.Impact -notlike 'in-use*' })
+if ($deletedNonSafe.Count -gt 0) {
+    Write-Host "  ! Rebuild/reinstall these before running their projects:" -ForegroundColor Yellow
+    foreach ($t in $deletedNonSafe) {
+        Write-Host ("      - {0}  ({1})" -f $t.Path, $t.Impact) -ForegroundColor DarkYellow
+    }
+}
 Write-Host ("Log written to: {0}" -f $script:LogFile) -ForegroundColor DarkGray
+Write-Host ([char]7)
 Write-Host ""
